@@ -11,7 +11,7 @@ fn main() {
 
     spawn("/usr/bin/id");
 
-    karen::escalate_if_needed().expect("sudo failed");
+    karen::builder().as_user(100).suid().unwrap();
 
     uid_euid("②");
 

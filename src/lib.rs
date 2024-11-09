@@ -43,14 +43,25 @@ pub fn check() -> RunningAs {
     //if uid == 0 { Root } else { User }
 }
 
+/// Helper struct to de/escalate privileges.
+///
+/// This struct contains helper code to run suid/sgid. It also comes with a normal suid/sgid wrapper without
+/// needing to restart the process.
+///
+/// To suid or sgid without restarting the process, you need to have the CAP_SETUID and CAP_SETGID capabilities set.
+///
 pub struct Escalate {
     wrapper: String,
+    as_user: Option<u32>,
+    as_group: Option<u32>,
 }
 
 impl Default for Escalate {
     fn default() -> Self {
         Escalate {
             wrapper: "sudo".to_string(),
+            as_user: None,
+            as_group: None,
         }
     }
 }
@@ -63,6 +74,121 @@ impl Escalate {
     pub fn wrapper(&mut self, wrapper: &str) -> &mut Self {
         self.wrapper = wrapper.to_string();
         self
+    }
+
+    /// Attempt to escalate to specified UID (or root if not specified) without restarting the process.
+    pub fn suid(&self) -> Result<RunningAs, Box<dyn Error>> {
+        let current = check();
+        trace!("Running as {:?}", current);
+        match current {
+            Root => {
+                let uid = self.as_user.unwrap_or(0);
+                trace!("setuid({})", uid);
+                if uid != 0 {
+                    unsafe {
+                        if libc::setuid(uid) != 0 {
+                            return Err(Box::new(std::io::Error::last_os_error()));
+                        }
+                    }
+                    Ok(Suid)
+                } else {
+                    Ok(Root)
+                }
+            }
+            Suid | User => {
+                let uid = self.as_user.unwrap_or(0);
+                trace!("setuid({})", uid);
+                unsafe {
+                    if libc::setuid(uid) != 0 {
+                        return Err(Box::new(std::io::Error::last_os_error()));
+                    }
+                }
+                if uid == 0 {
+                    Ok(Root)
+                } else {
+                    Ok(Suid)
+                }
+            }
+        }
+    }
+
+    pub fn as_group(&mut self, group_id: u32) -> &mut Self {
+        self.as_group = Some(group_id);
+        self
+    }
+
+    /// Set the user ID to the specified user
+    pub fn as_user(&mut self, user_id: u32) -> &mut Self {
+        self.as_user = Some(user_id);
+        self
+    }
+
+    /// Attempt to escalate to specified GID (or root group if not specified) without restarting the process.
+    pub fn sgid(&self) -> Result<RunningAs, Box<dyn Error>> {
+        let current = check();
+        trace!("Running as {:?}", current);
+        match current {
+            Root => {
+                let gid = self.as_group.unwrap_or(0);
+                trace!("setgid({})", gid);
+                if gid != 0 {
+                    unsafe {
+                        if libc::setgid(gid) != 0 {
+                            return Err(Box::new(std::io::Error::last_os_error()));
+                        }
+                    }
+                    Ok(Suid)
+                } else {
+                    Ok(Root)
+                }
+            }
+            Suid | User => {
+                let gid = self.as_group.unwrap_or(0);
+                trace!("setgid({})", gid);
+                unsafe {
+                    if libc::setgid(gid) != 0 {
+                        return Err(Box::new(std::io::Error::last_os_error()));
+                    }
+                }
+                if gid == 0 {
+                    Ok(Root)
+                } else {
+                    Ok(Suid)
+                }
+            }
+        }
+    }
+
+    /// Set the user and group IDs to the specified user and group, respectively without triggering a restart.
+    pub fn set_ids(&self) -> Result<RunningAs, Box<dyn Error>> {
+        if let Some(_gid) = self.as_group {
+            self.sgid()?;
+        }
+        if let Some(_uid) = self.as_user {
+            self.suid()?;
+        }
+
+        Ok(check())
+    }
+
+    /// Run a function inside suid/sgid scope
+    pub fn run_in_scope<F, R>(&self, func: F) -> Result<R, Box<dyn Error>>
+    where
+        F: FnOnce() -> R,
+    {
+        let original_uid = unsafe { libc::getuid() };
+        let original_gid = unsafe { libc::getgid() };
+
+        self.set_ids()?;
+
+        let result = func();
+
+        unsafe {
+            libc::setuid(original_uid);
+            libc::setgid(original_gid);
+        }
+
+        Ok(result)
     }
 
     ///  Escalate privileges while maintaining RUST_BACKTRACE and selected environment variables (or none).
@@ -113,7 +239,6 @@ impl Escalate {
             };
             if let Some(value) = value {
                 trace!("relaying RUST_BACKTRACE={}", value);
-                // command.arg(format!("RUST_BACKTRACE={}", value));
                 command.env("RUST_BACKTRACE", value);
             }
         }
@@ -135,6 +260,10 @@ impl Escalate {
             }
         }
 
+        if let Some(user_id) = self.as_user {
+            command.arg(format!("--user={}", user_id));
+        }
+
         let mut child = command.args(args).spawn().expect("failed to execute child");
 
         let ecode = child.wait().expect("failed to wait on child");
@@ -145,7 +274,6 @@ impl Escalate {
             std::process::exit(0);
         }
     }
-
     /// Restart your program with root privileges if the user is not privileged enough.
     ///
     /// Activates SUID privileges when available
