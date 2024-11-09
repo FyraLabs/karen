@@ -2,20 +2,31 @@
 extern crate log;
 extern crate simple_logger;
 
+// Try running this example as root, or using setcap to give it the necessary capabilities!
+// ... or do something else to give it suid/sgid permissions I guess?
+
 fn main() {
     simple_logger::SimpleLogger::new()
         .init()
         .expect("unable to initialize logger");
 
-    uid_euid("①");
+    uid_euid("[1]");
 
     spawn("/usr/bin/id");
 
-    karen::builder().as_user(100).suid().unwrap();
+    println!("RunningAs: {:#?}", karen::check());
 
-    uid_euid("②");
+    karen::builder()
+        .as_user(1001)
+        .as_group(1001)
+        .set_ids()
+        .unwrap();
+
+    uid_euid("[2]");
 
     spawn("/usr/bin/id");
+
+    println!("RunningAs: {:#?}", karen::check());
 }
 
 fn uid_euid(nth: &str) {

@@ -22,7 +22,7 @@ pub enum RunningAs {
     /// Root (Linux/Mac OS/Unix) or Administrator (Windows)
     Root,
     /// Running as a normal user
-    User,
+    User(u32),
     /// Started from SUID, a call to `karen::escalate_if_needed` or `karen::with_env` is required to claim the root privileges at runtime.
     /// This does not restart the process.
     Suid,
@@ -38,7 +38,7 @@ pub fn check() -> RunningAs {
     match (uid, euid) {
         (0, 0) => Root,
         (_, 0) => Suid,
-        (_, _) => User,
+        (_, _) => User(uid),
     }
     //if uid == 0 { Root } else { User }
 }
@@ -95,7 +95,7 @@ impl Escalate {
                     Ok(Root)
                 }
             }
-            Suid | User => {
+            Suid | User(_) => {
                 let uid = self.as_user.unwrap_or(0);
                 trace!("setuid({})", uid);
                 unsafe {
@@ -142,7 +142,7 @@ impl Escalate {
                     Ok(Root)
                 }
             }
-            Suid | User => {
+            Suid | User(_) => {
                 let gid = self.as_group.unwrap_or(0);
                 trace!("setgid({})", gid);
                 unsafe {
@@ -203,13 +203,19 @@ impl Escalate {
                 return Ok(current);
             }
             Suid => {
-                trace!("setuid(0)");
-                unsafe {
-                    libc::setuid(0);
+                let uid = self.as_user.unwrap_or(0);
+                trace!("setuid({})", uid);
+                if uid != 0 {
+                    unsafe {
+                        if libc::setuid(uid) != 0 {
+                            return Err(Box::new(std::io::Error::last_os_error()));
+                        }
+                    }
+                    return Ok(Suid);
                 }
                 return Ok(current);
             }
-            User => {
+            User(_) => {
                 debug!("Escalating privileges");
             }
         }
