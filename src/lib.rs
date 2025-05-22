@@ -203,6 +203,26 @@ pub fn pkexec() -> Result<RunningAs, Box<dyn Error>> {
 }
 
 #[cfg(unix)]
+/// Similar to with_env, but with pkexec as the wrapper
+///
+/// ```
+/// # use std::error::Error;
+/// # fn main() -> Result<(), Box<dyn Error>> {
+/// #   if karen::check() == karen::RunningAs::Root {
+/// karen::pkexec_with_env(&["CARGO_", "MY_APP_"])?;
+/// // the following gets only executed in privileged mode
+/// #   } else {
+/// #     eprintln!("not actually testing");
+/// #   }
+/// #   Ok(())
+/// # }
+///
+#[inline]
+pub fn pkexec_with_env(prefixes: &[&str]) -> Result<RunningAs, Box<dyn Error>> {
+    builder().wrapper("pkexec").with_env(prefixes)
+}
+
+#[cfg(unix)]
 /// Similar to escalate_if_needed, but with doas as the wrapper
 ///
 /// ```
